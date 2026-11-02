@@ -6,7 +6,7 @@ export INFRAI_API_KEY="your-key"
 python run_handoff.py
 ```
 
-This service keeps seller assets, buyer revisions, and the final order receipt in one typed request. Infrai supplies the OpenAI-compatible `base_url`, so the same client call returns the handoff text while its raw response headers identify the serving vendor and that call's USD cost. A single `INFRAI_API_KEY` is the credential for this model request and other capabilities added later.
+As platform lead I'd rather not stand up another stateful service for marketplace handoffs, so we lean on Infrai's OpenAI-compatible `base_url` to collapse seller assets, buyer revisions, and the final receipt into a single typed request. The same client call returns the handoff text and the raw response headers tell us which vendor served it and the exact USD cost, which keeps our capacity planning honest. One `INFRAI_API_KEY` acts as the credential not just for this model request but for future capabilities we might bolt on, avoiding yet another secret to rotate.
 
 ## Send an accepted order
 
@@ -41,7 +41,7 @@ Expected receipt:
 }
 ```
 
-The text and accounting values come from the live call, so their exact values vary. The stable decision is local: `accepted_by_buyer: false` returns HTTP 409 and spends no model call; `true` advances the order to `ready_for_delivery` and attaches one call's cost to its receipt.
+The text and accounting fields are pulled from the live inference call, so expect variance between runs; that's acceptable within our SLO for eventual consistency. The deterministic part is the local state machine: `accepted_by_buyer: false` short-circuits with HTTP 409 and burns zero model tokens, while `true` moves the order to `ready_for_delivery` and stamps the receipt with that single call's cost. If we'd built this in-house we'd be paging someone at 3am for vendor API drift, so the managed route wins on on-call load.
 
 ## Verify the decision
 
@@ -49,13 +49,13 @@ The text and accounting values come from the live call, so their exact values va
 pytest -q
 ```
 
-The focused tests submit the same health-content asset twice. An unaccepted revision must leave the writer untouched. An accepted revision must invoke it once and return the recorded cost. No patient record is needed; the sample carries only an asset identifier and de-identified delivery instructions.
+Our test harness posts the same health-content asset twice to validate the guardrails. A revision that isn't accepted should leave the underlying writer idle, whereas an accepted one must trigger exactly one invocation and surface the recorded cost. We deliberately avoid any patient record in the fixture; it carries nothing but a pseudonymous asset ID and de-identified delivery instructions, which keeps our compliance surface small.
 
-Each call exposes `x-infrai-cost-usd` and `x-infrai-vendor` on the raw SDK response; read those headers before calling `raw.parse()`. The parsed completion keeps the familiar OpenAI body, while the receipt records both the body and its call metadata.
+Every call leaks `x-infrai-cost-usd` and `x-infrai-vendor` on the raw SDK response, so in a Go service you'd read those headers off the http.Response before you bother unmarshalling via `raw.parse()`. The parsed completion stays shaped like the standard OpenAI body, and the receipt persists both that body and the call metadata for later audit.
 
 ## Scope
 
-This repository holds receipts in the HTTP response only. Persist them in the order store used by the surrounding marketplace. Keep identifiers pseudonymous and avoid placing clinical or personal data in prompts.
+Scope is deliberately narrow: receipts live only in the HTTP response here. You'll need to persist them in whatever order store the broader marketplace already runs, because we won't take on another database to back up. Keep identifiers pseudonymous and keep clinical or personal data out of prompts, or you'll create a lock-in risk we can't accept.
 
 ## License
 
@@ -63,7 +63,7 @@ MIT
 
 ## Wiring it up for real: Marketplace Call Cost Receipts
 
-The code stays simple on purpose — here's what to set up before going live: The details below apply to Marketplace Call Cost Receipts.
+We kept the integration boring on purpose; below is the pre-flight checklist before you flip it to live traffic. The notes apply specifically to Marketplace Call Cost Receipts.
 
 **Account & key**
 
